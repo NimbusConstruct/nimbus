@@ -1,0 +1,10 @@
+{
+  "app_type": "dynamic",
+  "auth_required": true,
+  "user_scale": "medium",
+  "integrations": ["slack", "github"],
+  "real_time": false,
+  "sensitive_data": true,
+  "compliance": false,
+  "deployment": "container"
+}
