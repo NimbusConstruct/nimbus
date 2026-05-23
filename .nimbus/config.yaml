@@ -1,0 +1,10 @@
+aws_region: us-west-1
+aws_ami_id: ami-REPLACE_ME
+aws_instance_type: t3.small
+aws_key_name: REPLACE_ME
+aws_subnet_id: subnet-REPLACE_ME
+aws_security_group_id: sg-REPLACE_ME
+base_domain: adamrayalcala.net
+route53_hosted_zone_id: Z091809336T2HBMARUUV5
+github_owner: NimbusConstruct
+github_visibility: private

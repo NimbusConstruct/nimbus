@@ -2,7 +2,7 @@ import os
 
 
 def generate_github_actions(project, architecture, output_dir, env):
-    workflows_dir = os.path.join(output_dir, ".github", "workflows")
+    workflows_dir = os.path.join(output_dir, ".github", "workflows", f"{env}")
     os.makedirs(workflows_dir, exist_ok=True)
 
     workflow = f"""
@@ -110,5 +110,5 @@ jobs:
           echo "Deploy Lambda here"
 """
 
-    with open(os.path.join(workflows_dir, "deploy.yml"), "w") as f:
+    with open(os.path.join(workflows_dir, f"{env}-deploy.yml"), "w") as f:
         f.write(workflow.strip())
