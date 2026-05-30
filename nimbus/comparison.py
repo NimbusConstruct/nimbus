@@ -1,5 +1,5 @@
 from nimbus.explainer import get_explanation
-
+from nimbus.costs import estimate_cost
 
 def get_top_architectures(results, top_n=3):
     sorted_arch = sorted(
@@ -10,7 +10,7 @@ def get_top_architectures(results, top_n=3):
     return sorted_arch[:top_n]
 
 
-def compare_architectures(results):
+def compare_architectures(results, project):
     top = get_top_architectures(results)
 
     output = []
@@ -18,7 +18,8 @@ def compare_architectures(results):
 
     # Ranking
     for i, (arch, data) in enumerate(top, start=1):
-        output.append(f"{i}. {arch} ({data['confidence']})")
+        cost = estimate_cost(project, arch)
+        output.append(f"{i}. {arch} ({data['confidence']}) - ${cost['total']}/mo")
 
     output.append("\n----------------------------------------\n")
     output.append("🔍 Comparison\n")
@@ -26,8 +27,8 @@ def compare_architectures(results):
     # Side-by-side comparison
     for arch, data in top:
         explanation = get_explanation(arch)
-
-        output.append(f"[{arch}]")
+        cost = estimate_cost(project, arch)
+        output.append(f"{arch}: ${cost['total']}/mo")
 
         for w in explanation["why"][:2]:
             output.append(f"+ {w}")

@@ -9,6 +9,25 @@ from nimbus.engine import SmartArchitectureEngine
 from nimbus.explainer import get_explanation
 from nimbus.comparison import compare_architectures
 from nimbus.generators.factory import generate_infrastructure
+from nimbus.costs import estimate_cost
+from nimbus.bootstrap import bootstrap_repository
+from nimbus.doctor import format_doctor_report
+from nimbus.project_ops import (
+    build_project_record,
+    describe_record,
+    format_project_list,
+    list_projects,
+    load_project_record_by_name,
+    load_project_record_from_yaml,
+    mark_bootstrap_event,
+    mark_provisioning_started,
+    normalize_project_input,
+    record_provisioning_attempt,
+    save_project_record,
+    status_record,
+    sync_project_record_config,
+)
+from nimbus.providers import provision_project
 
 # Ensure cross-platform package path
 package_root = os.path.dirname(os.path.abspath(__file__))
@@ -111,7 +130,15 @@ def print_live_recommendation(project):
         for a in explanation["avoid_when"]:
             print(f"    - {a}")
         print()
-        print(compare_architectures(result["details"]))
+        print(compare_architectures(result["details"], project))
+        
+        cost = estimate_cost(project, best)
+
+        print("\n   💰 Estimated Monthly Cost:")
+        print(f"    Total: ${cost['total']}")
+        print(f"    Compute: ${cost['breakdown']['compute']}")
+        print(f"    Database: ${cost['breakdown']['database']}")
+        print(f"    Network: ${cost['breakdown']['network']}")
 
     except Exception:
         # avoid crashing intake if partial data
@@ -201,17 +228,145 @@ def run_intake_form():
 
 
 def load_project(path):
+    if path.endswith((".yaml", ".yml")):
+        record = load_project_record_from_yaml(path)
+        return record["project"]["input"]
     with open(path, "r") as f:
-        return json.load(f)
+        return normalize_project_input(json.load(f))
+
+
+def ask_project_name():
+    while True:
+        val = input("Project name: ").strip()
+        if val:
+            return val
+        print("Project name is required.")
+
+
+def collect_project_input():
+    return normalize_project_input({
+        "app_type": ask_choice("App type", ["brochure", "dynamic", "saas"], default="dynamic"),
+        "auth_required": ask_yes_no("Authentication required?", default="yes"),
+        "user_scale": ask_choice("Expected user scale", ["small", "medium", "large"], default="medium"),
+        "integrations": ask_multiple("Integrations", ["slack", "jira", "github"]),
+        "real_time": ask_yes_no("Real-time functionality?", default="no"),
+        "sensitive_data": ask_yes_no("Will app handle sensitive data?", default="no"),
+        "compliance": ask_yes_no("Need compliance (HIPAA/GDPR)?", default="no"),
+        "deployment": ask_choice("Deployment type", ["container", "serverless", "onprem"], default="container"),
+    })
+
+
+def create_project(should_provision=False):
+    print("\n=== Nimbus Project Create ===\n")
+    project_name = ask_project_name()
+    project = collect_project_input()
+    record = build_project_record(project_name, project)
+    paths = save_project_record(record)
+
+    activity = []
+    if should_provision:
+        record = mark_provisioning_started(record)
+        record, activity = provision_project(record)
+        record = record_provisioning_attempt(record, activity)
+        paths = save_project_record(record)
+
+    print("\nProject created")
+    print(f"Project ID: {record['project']['id']}")
+    print(f"YAML: {paths['yaml_path']}")
+    print(f"JSON: {paths['legacy_json_path']}")
+    print(f"Recommended architecture: {record['analysis']['recommended_architecture']}")
+    print(f"Estimated monthly cost: ${record['analysis']['cost_estimate']['total']}")
+    if should_provision:
+        print(f"Provisioning: {record['status']['provisioning']}")
+    print("\nNext commands:")
+    print(f"  nimbus describe project {paths['yaml_path']}")
+    print(f"  nimbus project status {record['project']['id']}")
+
+
+def provision_existing_project(project_ref):
+    record = load_project_record_by_name(project_ref)
+    record = sync_project_record_config(record)
+    record = mark_provisioning_started(record)
+    record, activity = provision_project(record)
+    record = record_provisioning_attempt(record, activity)
+    paths = save_project_record(record)
+
+    print()
+    print(f"Provisioning run complete for {record['project']['id']}")
+    print(f"Provisioning: {record['status']['provisioning']}")
+    print(f"YAML: {paths['yaml_path']}")
+    print(f"Status: nimbus project status {record['project']['id']}")
+
+
+def bootstrap_existing_project(project_ref):
+    record = load_project_record_by_name(project_ref)
+    try:
+        result = bootstrap_repository(record)
+    except RuntimeError as exc:
+        print()
+        print(str(exc))
+        print("If you're using cmd in VS Code, set NIMBUS_GITHUB_TOKEN in that same session before running bootstrap.")
+        return
+    record["status"]["generated_outputs"] = sorted(
+        set(record["status"].get("generated_outputs", [])) | set(result["files"])
+    )
+    record = mark_bootstrap_event(
+        record,
+        f"Bootstrapped repository contents for {result['repo']}.",
+    )
+    save_project_record(record)
+
+    print()
+    print(f"Bootstrap complete for {record['project']['id']}")
+    print(f"Repository: {result['repo']}")
+    print(f"Files: {', '.join(result['files'])}")
+    print(f"Domain: {result['domain']}")
 
 
 def main():
     parser = argparse.ArgumentParser(prog="nimbus")
     subparsers = parser.add_subparsers(dest="command")
 
+    project_parser = subparsers.add_parser("project", help="Manage Nimbus projects")
+    project_subparsers = project_parser.add_subparsers(dest="project_command")
+
+    project_create_parser = project_subparsers.add_parser("create", help="Create a project and write project files")
+    project_create_parser.add_argument(
+        "--provision",
+        action="store_true",
+        help="Invoke the provider integration scaffold after project creation",
+    )
+    project_provision_parser = project_subparsers.add_parser(
+        "provision",
+        help="Provision or reprovision an existing project",
+    )
+    project_provision_parser.add_argument(
+        "project_ref",
+        help="Project id or project json file name",
+    )
+
+    project_status_parser = project_subparsers.add_parser("status", help="Show project status")
+    project_status_parser.add_argument("project_ref", help="Project id or project json file name")
+    project_bootstrap_parser = project_subparsers.add_parser(
+        "bootstrap",
+        help="Bootstrap starter files and CI into a provisioned GitHub repository",
+    )
+    project_bootstrap_parser.add_argument(
+        "project_ref",
+        help="Project id or project json file name",
+    )
+    project_subparsers.add_parser("list", help="List saved Nimbus projects")
+
     # analyze command
     analyze_parser = subparsers.add_parser("analyze", help="Analyze project JSON")
     analyze_parser.add_argument("file", help="Path to project JSON file")
+
+    subparsers.add_parser("doctor", help="Check Nimbus provisioning prerequisites")
+
+    describe_parser = subparsers.add_parser("describe", help="Describe a Nimbus resource")
+    describe_subparsers = describe_parser.add_subparsers(dest="describe_command")
+    describe_project_parser = describe_subparsers.add_parser("project", help="Describe a project YAML file")
+    describe_project_parser.add_argument("file", help="Path to project.yaml created by nimbus project create")
 
     # intake command
     intake_parser = subparsers.add_parser("intake", help="Run semi-AI assisted intake form")
@@ -227,7 +382,36 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "analyze":
+    if args.command == "project":
+        if args.project_command == "create":
+            create_project(should_provision=args.provision)
+        elif args.project_command == "provision":
+            provision_existing_project(args.project_ref)
+        elif args.project_command == "bootstrap":
+            bootstrap_existing_project(args.project_ref)
+        elif args.project_command == "list":
+            print()
+            print(format_project_list(list_projects()))
+        elif args.project_command == "status":
+            record = load_project_record_by_name(args.project_ref)
+            print()
+            print(status_record(record))
+        else:
+            project_parser.print_help()
+
+    elif args.command == "describe":
+        if args.describe_command == "project":
+            record = load_project_record_from_yaml(args.file)
+            print()
+            print(describe_record(record))
+        else:
+            describe_parser.print_help()
+
+    elif args.command == "doctor":
+        print()
+        print(format_doctor_report())
+
+    elif args.command == "analyze":
         project = load_project(args.file)
         engine = SmartArchitectureEngine(project)
         result = engine.analyze()

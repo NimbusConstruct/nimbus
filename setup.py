@@ -4,7 +4,7 @@ setup(
     name="nimbus",
     version="0.1.0",
     packages=find_packages(),
-    install_requires=[],
+    install_requires=["boto3>=1.34.0"],
     entry_points={
         "console_scripts": [
             "nimbus=nimbus.cli:main",
